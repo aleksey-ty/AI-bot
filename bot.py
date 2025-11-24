@@ -131,8 +131,6 @@ if len(history_tail) > MAX_HISTORY:
 messages_for_model.append(
     {"role": "system", "content": "Если нужно, давай ответ в виде нумерованного списка или шагов."}
 )
-
-
     try:
         # Вызов OpenAI SDK может быть блокирующим — запускаем в отдельном потоке, чтобы не блокировать event loop
         loop = asyncio.get_running_loop()
