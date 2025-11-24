@@ -72,6 +72,30 @@ async def start_command(message: types.Message):
     logging.info(f"User {message.from_user.id} started bot. username={message.from_user.username}")
 
 # --------------- Основной обработчик сообщений ---------------
+
+async def summarize_history(history: list) -> str:
+    """
+    Сжимает длинную историю в 1–2 предложения.
+    Нужно, чтобы бот не забывал старые факты.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        summary_resp = await loop.run_in_executor(
+            None,
+            lambda: client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "Сжать диалог пользователя в 1–2 предложения, сохранив суть."},
+                    {"role": "user", "content": str(history)}
+                ]
+            )
+        )
+        return summary_resp.choices[0].message.content
+    except Exception as e:
+        logging.exception(f"Ошибка при сжатии истории: {e}")
+        return "Пользователь общался ранее, обсуждал разные темы."
+
+
 @dp.message()
 async def handle_message(message: types.Message):
     user_id = message.from_user.id
@@ -90,7 +114,14 @@ async def handle_message(message: types.Message):
     # Храним system + последние N сообщений (user/assistant)
     # Отрезаем так, чтобы не превышать размер (учитываем системное сообщение на 0-м месте)
     history_tail = user_history[user_id][1:]  # без system
-    history_tail = history_tail[-MAX_HISTORY:]
+   # Если история слишком длинная — сжимаем старую часть
+if len(history_tail) > MAX_HISTORY:
+    old_part = history_tail[:-MAX_HISTORY]
+    condensed = await summarize_history(old_part)
+
+    # Заменяем старую часть на одно резюме
+    history_tail = [{"role": "assistant", "content": f"Краткое содержание прошлой беседы: {condensed}"}] + history_tail[-MAX_HISTORY:]
+
     messages_for_model = [SYSTEM_MESSAGE] + history_tail
 
     try:
