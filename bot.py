@@ -103,6 +103,25 @@ async def start_command(message: types.Message):
     logging.info(f"User {message.from_user.id} started bot.")
 
 
+@dp.message(Command("help"))
+async def help_command(message: types.Message):
+    help_text = (
+        "Я — твой AI-ассистент. Вот что я умею:\n\n"
+        "• Отвечать на вопросы (текстовые).\n"
+        "• Помнить контекст беседы и сжимать старую историю.\n"
+        "• Менять стиль общения (позже будет /mode).\n"
+        "• Очищать память диалога: /clear\n"
+        "• Проводить самопроверку: /selfcheck (опционально)\n\n"
+        "Примеры команд:\n"
+        "/start — запуск бота\n"
+        "/help — это сообщение\n"
+        "/clear — удалить историю текущего чата\n"
+        "/mode — выбрать режим (стандарт/эксперт/игровой/строгий)\n\n"
+        "Если хочешь — задай любой вопрос прямо сейчас, и я отвечу."
+    )
+    logging.info(f"User {message.from_user.id} requested help.")
+    await message.answer(help_text)
+
 # --------------- Главный обработчик текста ---------------
 @dp.message()
 async def handle_message(message: types.Message):
