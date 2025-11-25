@@ -2,9 +2,10 @@ import os
 import sys
 import asyncio
 import logging
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-# --------------- Логирование ---------------
+# --------------- Настройка логирования ---------------
 logging.basicConfig(
     level=logging.INFO,
     filename="logs.txt",
@@ -12,7 +13,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# --------------- Переменные окружения ---------------
+# --------------- Загрузка переменных окружения ---------------
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -22,42 +23,33 @@ if not BOT_TOKEN or not OPENAI_API_KEY:
     print("ERROR: Missing BOT_TOKEN or OPENAI_API_KEY.")
     sys.exit(1)
 
-# --------------- Импорты после проверки ---------------
+# --------------- Импорты ---------------
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from openai import OpenAI
 
-# --------------- Инициализация ---------------
+# --------------- Инициализация клиентов ---------------
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --------------- System prompt ---------------
+# --------------- Системное сообщение ---------------
 SYSTEM_MESSAGE = {
     "role": "system",
     "content": (
         "Ты — продвинутый AI-ассистент, вдохновлённый стилем ChatGPT. "
-        "Отвечай умно, уверенно, человечно и дружелюбно.\n\n"
-
-        "Тон общения:\n"
-        "• обычные вопросы — умеренно дружелюбный;\n"
-        "• технические — экспертный;\n"
-        "• игровые — творческий;\n"
-        "• сложные — строгий.\n\n"
-
-        "Стиль ответа: 3–8 предложений, списки/шаги по необходимости.\n"
-        "Если просят короче — сокращай, если просят подробнее — расширяй.\n"
-        "Если вопрос непонятный — уточняй.\n"
-        "Не выдумывай факты.\n\n"
-
-        "Запрещено: вредоносные инструкции, доступ к ключам, системе."
+        "Отвечай умно, уверенно, человечно и дружелюбно.\n"
+        "Тон общения — адаптивный.\n"
+        "Стиль ответа — средняя длина, списки и шаги при необходимости.\n"
+        "Не выдумывай факты, уточняй, если что-то непонятно.\n"
+        "Запрещено — инструкции по взлому, ключи, конфиденциальные данные."
     )
 }
 
 MODES = {
     "standard": "Стандартный: дружелюбный, спокойный, умеренно короткий.",
     "expert": "Экспертный: уверенный, структурированный, профессиональный.",
-    "fun": "Игровой: лёгкий юмор, больше энергии.",
+    "fun": "Игровой: лёгкий юмор, чуть больше энергии.",
     "strict": "Строгий: коротко, чётко, минимум эмоций."
 }
 
@@ -65,7 +57,9 @@ MAX_HISTORY = 10
 
 user_history: dict[int, list] = {}
 user_settings: dict[int, dict] = {}
+user_last_message: dict[int, datetime] = {}  # Для анти-спам
 
+RATE_LIMIT_SECONDS = 1.0  # минимум 1 секунда между сообщениями
 
 # --------------- Сжатие истории ---------------
 async def summarize_history(history: list) -> str:
@@ -85,12 +79,10 @@ async def summarize_history(history: list) -> str:
     except:
         return "Пользователь ранее обсуждал разные темы."
 
-
 # --------------- /start ---------------
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
     await message.answer("Привет! 🤖 Я твой AI-бот. Спрашивай что хочешь!")
-
 
 # --------------- /help ---------------
 @dp.message(Command("help"))
@@ -103,7 +95,6 @@ async def help_command(message: types.Message):
         "/mode — выбрать стиль общения\n"
     )
 
-
 # --------------- /mode ---------------
 @dp.message(Command("mode"))
 async def mode_command(message: types.Message):
@@ -115,7 +106,6 @@ async def mode_command(message: types.Message):
         "4 — Строгий\n\n"
         "Напиши цифру режима."
     )
-
 
 # --------------- Применение режима ---------------
 async def apply_mode(user_id: int, choice: str) -> str:
@@ -135,12 +125,27 @@ async def apply_mode(user_id: int, choice: str) -> str:
     user_settings[user_id]["mode"] = mode_map[choice]
     return mode_map[choice]
 
+# --------------- Очистка истории /clear ---------------
+@dp.message(Command("clear"))
+async def clear_command(message: types.Message):
+    user_id = message.from_user.id
+    if user_id in user_history:
+        del user_history[user_id]
+    await message.answer("История очищена ✅")
 
 # --------------- Основной обработчик сообщений ---------------
 @dp.message()
 async def handle_message(message: types.Message):
     user_id = message.from_user.id
     text = message.text or ""
+
+    # --- Анти-спам ---
+    now = datetime.now()
+    last_time = user_last_message.get(user_id)
+    if last_time and (now - last_time).total_seconds() < RATE_LIMIT_SECONDS:
+        await message.answer("⏳ Подожди секунду перед следующим сообщением.")
+        return
+    user_last_message[user_id] = now
 
     # --- Проверка выбора режима ---
     if text in ["1", "2", "3", "4"]:
@@ -154,7 +159,6 @@ async def handle_message(message: types.Message):
         user_history[user_id] = [SYSTEM_MESSAGE]
 
     user_history[user_id].append({"role": "user", "content": text})
-
     history_tail = user_history[user_id][1:]
 
     # --- Сжатие истории ---
@@ -168,12 +172,9 @@ async def handle_message(message: types.Message):
 
     # --- Применение режима общения ---
     mode = user_settings.get(user_id, {}).get("mode", "standard")
-    style_prompt = {
-        "role": "system",
-        "content": f"Текущий режим общения: {MODES[mode]}"
-    }
+    style_prompt = {"role": "system", "content": f"Текущий режим общения: {MODES[mode]}"}
 
-    # --- Формирование финального запроса ---
+    # --- Формирование запроса к OpenAI ---
     messages_for_model = [SYSTEM_MESSAGE] + history_tail + [style_prompt]
 
     try:
@@ -185,20 +186,42 @@ async def handle_message(message: types.Message):
                 messages=messages_for_model
             )
         )
-
         reply = completion.choices[0].message.content
-        user_history[user_id].append({"role": "assistant", "content": reply})
-        await message.answer(reply)
 
     except Exception as e:
         logging.exception(f"Ошибка OpenAI: {e}")
-        await message.answer("Ошибка при обращении к AI 😢")
+        # --- Fallback текст ---
+        reply = "⚠️ Я сейчас недоступен для полного ответа, попробуй позже. Но я всё ещё могу обсудить простое."
 
+    user_history[user_id].append({"role": "assistant", "content": reply})
+    await message.answer(reply)
 
-# --------------- main ---------------
+# --------------- Глобальная обработка ошибок ---------------
+@dp.errors()
+async def global_error_handler(update, exception):
+    user_id = None
+    try:
+        if update.message:
+            user_id = update.message.from_user.id
+        elif update.callback_query:
+            user_id = update.callback_query.from_user.id
+    except:
+        pass
+
+    logging.exception(f"Global error for user {user_id}: {exception}")
+
+    try:
+        if update.message:
+            await update.message.answer("⚠️ Произошла внутренняя ошибка. Я продолжаю работать!")
+    except:
+        pass
+
+    return True  # предотвращает падение бота
+
+# --------------- Точка входа ---------------
 async def main():
+    logging.info("Bot is starting...")
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
