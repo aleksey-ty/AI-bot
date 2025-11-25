@@ -70,10 +70,18 @@ SYSTEM_MESSAGE = {
         "Если вопрос выходит за рамки — мягко предупреди и предложи безопасную альтернативу."
     )
 }
+MODES = {
+    "standard": "Стандартный: дружелюбный, спокойный, умеренно короткий.",
+    "expert": "Экспертный: уверенный тон, логичный, структурированный, профессиональный.",
+    "fun": "Игровой: лёгкий юмор, чуть больше энергии, но без детского тона.",
+    "strict": "Строгий: минимальные эмоции, чёткие прямые ответы."
+}
 
 
 MAX_HISTORY = 10
 user_history: dict[int, list] = {}
+# Хранилище настроек пользователей (режим общения)
+user_settings: dict[int, dict] = {}
 
 
 # --------------- Сжатие истории ---------------
@@ -102,6 +110,23 @@ async def start_command(message: types.Message):
     await message.answer("Привет! 🤖 Я твой AI-бот. Спрашивай что хочешь!")
     logging.info(f"User {message.from_user.id} started bot.")
 
+async def apply_mode(user_id: int, choice: str) -> str:
+    if user_id not in user_settings:
+        user_settings[user_id] = {"mode": "standard"}
+
+    mode_map = {
+        "1": "standard",
+        "2": "expert",
+        "3": "fun",
+        "4": "strict"
+    }
+
+    if choice not in mode_map:
+        return None
+
+    user_settings[user_id]["mode"] = mode_map[choice]
+    return mode_map[choice]
+
 
 @dp.message(Command("help"))
 async def help_command(message: types.Message):
@@ -122,12 +147,45 @@ async def help_command(message: types.Message):
     logging.info(f"User {message.from_user.id} requested help.")
     await message.answer(help_text)
 
+@dp.message(Command("mode"))
+async def mode_command(message: types.Message):
+    user_id = message.from_user.id
+
+    text = (
+        "Выберите режим общения:\n\n"
+        "1 — Стандартный\n"
+        "2 — Экспертный\n"
+        "3 — Игровой\n"
+        "4 — Строгий\n\n"
+        "Напиши цифру режима."
+    )
+
+    await message.answer(text)
+    logging.info(f"User {user_id} requested /mode.")
+
 # --------------- Главный обработчик текста ---------------
 @dp.message()
+# Проверяем, выбрал ли пользователь режим (1-4)
+if message.text in ["1", "2", "3", "4"]:
+    mode = await apply_mode(user_id, message.text)
+    if mode:
+        await message.answer(f"Режим переключён: {MODES[mode]}")
+        return
+
 async def handle_message(message: types.Message):
     user_id = message.from_user.id
     text = message.text or ""
     logging.info(f"Incoming from {user_id}: {text}")
+
+    # Определяем стиль ответа
+mode = user_settings.get(user_id, {}).get("mode", "standard")
+
+style_prompt = {
+    "role": "system",
+    "content": f"Текущий режим общения: {MODES[mode]}"
+}
+
+messages_for_model.append(style_prompt)
 
     # Создаём историю при первом сообщении
     if user_id not in user_history:
