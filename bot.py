@@ -4,8 +4,12 @@ import asyncio
 import logging
 from datetime import datetime
 from dotenv import load_dotenv
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from openai import OpenAI
 
-# --------------- Настройка логирования ---------------
+# ----------------- Настройка логирования -----------------
 logging.basicConfig(
     level=logging.INFO,
     filename="logs.txt",
@@ -13,7 +17,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# --------------- Загрузка переменных окружения ---------------
+# ----------------- Загрузка переменных окружения -----------------
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -23,45 +27,59 @@ if not BOT_TOKEN or not OPENAI_API_KEY:
     print("ERROR: Missing BOT_TOKEN or OPENAI_API_KEY.")
     sys.exit(1)
 
-# --------------- Импорты ---------------
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
-from openai import OpenAI
-
-# --------------- Инициализация клиентов ---------------
+# ----------------- Инициализация клиентов -----------------
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --------------- Системное сообщение ---------------
+# ----------------- Системное сообщение -----------------
 SYSTEM_MESSAGE = {
     "role": "system",
     "content": (
         "Ты — продвинутый AI-ассистент, вдохновлённый стилем ChatGPT. "
-        "Отвечай умно, уверенно, человечно и дружелюбно.\n"
-        "Тон общения — адаптивный.\n"
-        "Стиль ответа — средняя длина, списки и шаги при необходимости.\n"
-        "Не выдумывай факты, уточняй, если что-то непонятно.\n"
+        "Отвечай умно, уверенно, человечно и дружелюбно. "
+        "Тон общения — адаптивный, стиль ответа — средняя длина, используй списки и шаги при необходимости. "
+        "Не выдумывай факты, уточняй, если что-то непонятно. "
         "Запрещено — инструкции по взлому, ключи, конфиденциальные данные."
     )
 }
 
+# ----------------- Стили общения -----------------
 MODES = {
-    "standard": "Стандартный: дружелюбный, спокойный, умеренно короткий.",
-    "expert": "Экспертный: уверенный, структурированный, профессиональный.",
-    "fun": "Игровой: лёгкий юмор, чуть больше энергии.",
-    "strict": "Строгий: коротко, чётко, минимум эмоций."
+    "standard": "Дружелюбный и ясный: отвечает понятно и мягко, подходит для повседневного общения.",
+    "expert": "Экспертный: уверенный, структурированный, даёт логичные и точные объяснения.",
+    "fun": "Игровой: лёгкий и творческий, иногда с юмором, без перегиба.",
+    "strict": "Строгий: прямой, точный, минимальные эмоции, кратко и по делу."
 }
 
 MAX_HISTORY = 10
 RATE_LIMIT_SECONDS = 1.0
 
 user_history: dict[int, list] = {}
-user_settings: dict[int, dict] = {}
-user_profile: dict[int, dict] = {}  # долгосрочные данные: имя, тема, стиль
+user_profile: dict[int, dict] = {}  # {"name": str, "mode": str}
 user_last_message: dict[int, datetime] = {}
 
-# --------------- Сжатие истории ---------------
+# ----------------- Клавиатуры -----------------
+def main_menu_keyboard():
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    keyboard.add(
+        InlineKeyboardButton("🛠 Выбрать стиль общения", callback_data="menu_mode"),
+        InlineKeyboardButton("🧹 Очистить историю", callback_data="menu_clear"),
+        InlineKeyboardButton("❓ Помощь", callback_data="menu_help")
+    )
+    return keyboard
+
+def mode_keyboard():
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton("1️⃣ Дружелюбный", callback_data="mode_standard"),
+        InlineKeyboardButton("2️⃣ Экспертный", callback_data="mode_expert"),
+        InlineKeyboardButton("3️⃣ Игровой", callback_data="mode_fun"),
+        InlineKeyboardButton("4️⃣ Строгий", callback_data="mode_strict")
+    )
+    return keyboard
+
+# ----------------- Сжатие истории -----------------
 async def summarize_history(history: list) -> str:
     try:
         loop = asyncio.get_running_loop()
@@ -79,59 +97,50 @@ async def summarize_history(history: list) -> str:
     except:
         return "Пользователь ранее обсуждал разные темы."
 
-# --------------- /start ---------------
+# ----------------- Стартовое сообщение -----------------
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
     user_id = message.from_user.id
-    await message.answer("Привет! 🤖 Я твой AI-бот. Как тебя зовут?")
-    # Инициализируем профиль пользователя
+    await message.answer(
+        "Привет! 🤖 Я твой AI-бот. Здесь есть меню управления:",
+        reply_markup=main_menu_keyboard()
+    )
     if user_id not in user_profile:
         user_profile[user_id] = {"name": None, "mode": "standard"}
 
-# --------------- /help ---------------
-@dp.message(Command("help"))
-async def help_command(message: types.Message):
-    await message.answer(
-        "Команды:\n"
-        "/start — начать\n"
-        "/help — помощь\n"
-        "/clear — очистить историю\n"
-        "/mode — выбрать стиль общения\n"
-    )
+# ----------------- Обработка нажатий кнопок -----------------
+@dp.callback_query()
+async def handle_menu(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    data = callback_query.data
 
-# --------------- /mode ---------------
-@dp.message(Command("mode"))
-async def mode_command(message: types.Message):
-    await message.answer(
-        "Выберите режим:\n\n"
-        "1 — Стандартный\n"
-        "2 — Экспертный\n"
-        "3 — Игровой\n"
-        "4 — Строгий\n\n"
-        "Напиши цифру режима."
-    )
+    if data == "menu_help":
+        await callback_query.message.answer(
+            "Это интерактивное меню:\n\n"
+            "🛠 Выбрать стиль общения — выбрать режим бота\n"
+            "🧹 Очистить историю — удалить всю историю диалога\n"
+            "❓ Помощь — показать это сообщение"
+        )
 
-async def apply_mode(user_id: int, choice: str) -> str:
-    if user_id not in user_profile:
-        user_profile[user_id] = {"name": None, "mode": "standard"}
+    elif data == "menu_clear":
+        if user_id in user_history:
+            del user_history[user_id]
+        await callback_query.message.answer("✅ История очищена.")
 
-    mode_map = {"1": "standard", "2": "expert", "3": "fun", "4": "strict"}
+    elif data == "menu_mode":
+        await callback_query.message.answer(
+            "Выберите стиль общения:",
+            reply_markup=mode_keyboard()
+        )
 
-    if choice not in mode_map:
-        return None
+    elif data.startswith("mode_"):
+        selected_mode = data.split("_")[1]
+        user_profile[user_id]["mode"] = selected_mode
+        await callback_query.message.answer(f"Режим переключён: {MODES[selected_mode]}")
 
-    user_profile[user_id]["mode"] = mode_map[choice]
-    return mode_map[choice]
+    await callback_query.answer()
 
-# --------------- /clear ---------------
-@dp.message(Command("clear"))
-async def clear_command(message: types.Message):
-    user_id = message.from_user.id
-    if user_id in user_history:
-        del user_history[user_id]
-    await message.answer("История очищена ✅")
-
-# --------------- Основной обработчик сообщений ---------------
+# ----------------- Основной обработчик сообщений -----------------
 @dp.message()
 async def handle_message(message: types.Message):
     user_id = message.from_user.id
@@ -146,18 +155,10 @@ async def handle_message(message: types.Message):
     user_last_message[user_id] = now
 
     # --- Сбор имени пользователя ---
-    if user_id not in user_profile or user_profile[user_id]["name"] is None:
-        user_profile[user_id] = user_profile.get(user_id, {})
+    if user_profile.get(user_id, {}).get("name") is None:
         user_profile[user_id]["name"] = text
         await message.answer(f"Приятно познакомиться, {text}! Теперь можешь задавать вопросы.")
         return
-
-    # --- Проверка выбора режима ---
-    if text in ["1", "2", "3", "4"]:
-        mode = await apply_mode(user_id, text)
-        if mode:
-            await message.answer(f"Режим переключён: {MODES[mode]}")
-            return
 
     # --- Инициализация истории ---
     if user_id not in user_history:
@@ -173,16 +174,15 @@ async def handle_message(message: types.Message):
         history_tail = [{"role": "assistant",
                          "content": f"Краткое содержание прежнего диалога: {condensed}"}] + history_tail[-MAX_HISTORY:]
 
-    # --- Режим общения ---
+    # --- Режим общения и имя пользователя ---
     mode = user_profile.get(user_id, {}).get("mode", "standard")
     style_prompt = {"role": "system", "content": f"Текущий режим общения: {MODES[mode]}"}
-
-    # --- Имя пользователя в системном промпте ---
     name_prompt = {"role": "system", "content": f"Имя пользователя: {user_profile[user_id]['name']}"}
 
-    # --- Формируем запрос к OpenAI ---
     messages_for_model = [SYSTEM_MESSAGE] + [name_prompt, style_prompt] + history_tail
+    messages_for_model.append({"role": "system", "content": "Если нужно — используй списки или шаги."})
 
+    # --- Вызов OpenAI ---
     try:
         loop = asyncio.get_running_loop()
         completion = await loop.run_in_executor(
@@ -193,37 +193,26 @@ async def handle_message(message: types.Message):
             )
         )
         reply = completion.choices[0].message.content
-
     except Exception as e:
         logging.exception(f"Ошибка OpenAI: {e}")
-        reply = "⚠️ Я сейчас недоступен для полного ответа, попробуй позже."
+        reply = "⚠️ Я сейчас недоступен, попробуй позже."
 
     user_history[user_id].append({"role": "assistant", "content": reply})
     await message.answer(reply)
 
-# --------------- Глобальная обработка ошибок ---------------
+# ----------------- Глобальная обработка ошибок -----------------
 @dp.errors()
 async def global_error_handler(update, exception):
-    user_id = None
-    try:
-        if update.message:
-            user_id = update.message.from_user.id
-        elif update.callback_query:
-            user_id = update.callback_query.from_user.id
-    except:
-        pass
-
+    user_id = getattr(update.message.from_user, "id", None)
     logging.exception(f"Global error for user {user_id}: {exception}")
-
     try:
         if update.message:
             await update.message.answer("⚠️ Произошла внутренняя ошибка. Я продолжаю работать!")
     except:
         pass
-
     return True
 
-# --------------- Точка входа ---------------
+# ----------------- Точка входа -----------------
 async def main():
     logging.info("Bot is starting...")
     await dp.start_polling(bot)
