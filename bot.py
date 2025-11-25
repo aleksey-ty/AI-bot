@@ -17,7 +17,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# ----------------- Загрузка переменных окружения -----------------
+# ----------------- Переменные окружения -----------------
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -27,7 +27,7 @@ if not BOT_TOKEN or not OPENAI_API_KEY:
     print("ERROR: Missing BOT_TOKEN or OPENAI_API_KEY.")
     sys.exit(1)
 
-# ----------------- Инициализация клиентов -----------------
+# ----------------- Инициализация -----------------
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -59,16 +59,7 @@ user_history: dict[int, list] = {}
 user_profile: dict[int, dict] = {}  # {"name": str, "mode": str}
 user_last_message: dict[int, datetime] = {}
 
-# ----------------- Клавиатуры -----------------
-def main_menu_keyboard():
-    keyboard = InlineKeyboardMarkup(row_width=1)
-    keyboard.add(
-        InlineKeyboardButton("🛠 Выбрать стиль общения", callback_data="menu_mode"),
-        InlineKeyboardButton("🧹 Очистить историю", callback_data="menu_clear"),
-        InlineKeyboardButton("❓ Помощь", callback_data="menu_help")
-    )
-    return keyboard
-
+# ----------------- Inline клавиатура для выбора режима -----------------
 def mode_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -94,7 +85,8 @@ async def summarize_history(history: list) -> str:
             )
         )
         return result.choices[0].message.content
-    except:
+    except Exception as e:
+        logging.exception(f"Ошибка сжатия истории: {e}")
         return "Пользователь ранее обсуждал разные темы."
 
 # ----------------- Стартовое сообщение -----------------
@@ -102,11 +94,38 @@ async def summarize_history(history: list) -> str:
 async def start_command(message: types.Message):
     user_id = message.from_user.id
     await message.answer(
-        "Привет! 🤖 Я твой AI-бот. Здесь есть меню управления:",
-        reply_markup=main_menu_keyboard()
+        "Привет! 🤖 Я твой AI-бот. Используй команды:\n"
+        "/help — помощь\n"
+        "/clear — очистить историю\n"
+        "/mode — выбрать стиль общения"
     )
     if user_id not in user_profile:
         user_profile[user_id] = {"name": None, "mode": "standard"}
+
+# ----------------- Команда /help -----------------
+@dp.message(Command("help"))
+async def help_command(message: types.Message):
+    await message.answer(
+        "Команды бота:\n"
+        "/start — запустить бота\n"
+        "/help — показать это сообщение\n"
+        "/clear — очистить историю\n"
+        "/mode — выбрать стиль общения\n\n"
+        "После задания имени бот будет помнить ваш контекст и стиль общения."
+    )
+
+# ----------------- Команда /clear -----------------
+@dp.message(Command("clear"))
+async def clear_command(message: types.Message):
+    user_id = message.from_user.id
+    if user_id in user_history:
+        del user_history[user_id]
+    await message.answer("✅ История очищена.")
+
+# ----------------- Команда /mode -----------------
+@dp.message(Command("mode"))
+async def mode_command(message: types.Message):
+    await message.answer("Выберите режим общения:", reply_markup=mode_keyboard())
 
 # ----------------- Обработка нажатий кнопок -----------------
 @dp.callback_query()
@@ -114,26 +133,7 @@ async def handle_menu(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     data = callback_query.data
 
-    if data == "menu_help":
-        await callback_query.message.answer(
-            "Это интерактивное меню:\n\n"
-            "🛠 Выбрать стиль общения — выбрать режим бота\n"
-            "🧹 Очистить историю — удалить всю историю диалога\n"
-            "❓ Помощь — показать это сообщение"
-        )
-
-    elif data == "menu_clear":
-        if user_id in user_history:
-            del user_history[user_id]
-        await callback_query.message.answer("✅ История очищена.")
-
-    elif data == "menu_mode":
-        await callback_query.message.answer(
-            "Выберите стиль общения:",
-            reply_markup=mode_keyboard()
-        )
-
-    elif data.startswith("mode_"):
+    if data.startswith("mode_"):
         selected_mode = data.split("_")[1]
         user_profile[user_id]["mode"] = selected_mode
         await callback_query.message.answer(f"Режим переключён: {MODES[selected_mode]}")
